@@ -9,12 +9,6 @@ This module bypasses the admin panel login screen, automatically logging in as
 the user provided in the configuration. Since it doesn't run any validations,
 this module should be used only on local environments (i.e.: not public).
 
-## Installation
-
-    composer require --dev vaimo/module-admin-auto-login
-    php bin/magento module:enable Vaimo_AdminAutoLogin
-    php bin/magento setup:upgrade
-
 ## Usage
 
 Access the admin URL for the project. You should be logged in automatically.
