@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Copyright © 2009-2017 Vaimo Group. All rights reserved.
+ * See LICENSE for license details.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:Event/etc/events.xsd">
+
+    <event name="controller_action_predispatch">
+        <observer name="two_factor_auth_check" disabled="true"/>
+    </event>
+    <event name="admin_user_load_after">
+        <observer name="two_factor_auth_admin_user_load_after" disabled="true"/>
+    </event>
+</config>
