@@ -5,6 +5,25 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
+### Changed 
+
+- Dropped support for Magento 2.0
+
+## [1.4.5] - 2022-06-02
+### Fixed
+
+- Fix Magento Framework version requirements in composer.json to make module possibly to require with M2.4.x
+
+## [1.4.4] - 2022-05-06
+### Added
+
+- Disable password changing request if module is active
+- Handle "There are no admin users to attempt login to." error more gracefully
+
+## [1.4.3] - 2022-05-03
+### Added 
+
+- Support for Magento 2.4.x 
 
 ## [1.4.2] - 2019-03-28
 ### Fixed

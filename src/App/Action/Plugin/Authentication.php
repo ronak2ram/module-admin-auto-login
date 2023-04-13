@@ -1,29 +1,31 @@
 <?php
 /**
- * Copyright © 2009-2017 Vaimo Group. All rights reserved.
+ * Copyright © Vaimo Group. All rights reserved.
  * See LICENSE for license details.
  */
-
 namespace Vaimo\AdminAutoLogin\App\Action\Plugin;
 
 use Magento\Framework\Exception\AuthenticationException;
 use Magento\Framework\Exception\State\UserLockedException;
+use Magento\Security\Model\AdminSessionsManager;
+use function in_array;
+use function sprintf;
+use function array_keys;
+use function reset;
 
 class Authentication
 {
-
     /**
      * Default usernames to attempt login if there is no configuration
      */
-    const DEFAULT_USERNAMES = [
-        'jambi',
+    private const DEFAULT_USERNAMES = [
         'admin',
     ];
 
     /**
      * Controller actions that must be reachable without authentication
      */
-    const CONTROLLER_ACTIONS_OPEN = [
+    private const CONTROLLER_ACTIONS_OPEN = [
         'forgotpassword',
         'resetpassword',
         'resetpasswordpost',
@@ -47,6 +49,11 @@ class Authentication
     private $eventManager;
 
     /**
+     * @var \Magento\Framework\Message\ManagerInterface
+     */
+    private $messageManager;
+
+    /**
      * @var \Magento\Framework\Data\Collection\ModelFactory
      */
     private $modelFactory;
@@ -66,24 +73,54 @@ class Authentication
      */
     private $adminUserSource;
 
+    /**
+     * @var AdminSessionsManager
+     */
+    private $adminSessionsManager;
+
+    /**
+     * @param \Magento\Backend\Model\Auth $auth
+     * @param \Magento\Backend\Model\UrlInterface $backendUrl
+     * @param \Magento\Framework\Event\ManagerInterface $eventManager
+     * @param \Magento\Framework\Message\ManagerInterface $messageManager
+     * @param \Magento\Framework\Data\Collection\ModelFactory $modelFactory
+     * @param \Magento\Framework\Controller\Result\RedirectFactory $resultRedirectFactory
+     * @param \Magento\Framework\App\Config\ScopeConfigInterface $scopeConfig
+     * @param \Vaimo\AdminAutoLogin\Model\Config\Source\AdminUser $adminUserSource
+     * @param AdminSessionsManager $adminSessionsManager
+     */
     public function __construct(
         \Magento\Backend\Model\Auth $auth,
         \Magento\Backend\Model\UrlInterface $backendUrl,
         \Magento\Framework\Event\ManagerInterface $eventManager,
+        \Magento\Framework\Message\ManagerInterface $messageManager,
         \Magento\Framework\Data\Collection\ModelFactory $modelFactory,
         \Magento\Framework\Controller\Result\RedirectFactory $resultRedirectFactory,
         \Magento\Framework\App\Config\ScopeConfigInterface $scopeConfig,
-        \Vaimo\AdminAutoLogin\Model\Config\Source\AdminUser $adminUserSource
+        \Vaimo\AdminAutoLogin\Model\Config\Source\AdminUser $adminUserSource,
+        \Magento\Security\Model\AdminSessionsManager $adminSessionsManager
     ) {
         $this->auth = $auth;
         $this->backendUrl = $backendUrl;
         $this->eventManager = $eventManager;
+        $this->messageManager = $messageManager;
         $this->modelFactory = $modelFactory;
         $this->resultRedirectFactory = $resultRedirectFactory;
         $this->config = $scopeConfig;
         $this->adminUserSource = $adminUserSource;
+        $this->adminSessionsManager = $adminSessionsManager;
     }
 
+    /**
+     * @param \Magento\Framework\App\ActionInterface $subject
+     * @param \Closure $proceed
+     * @param \Magento\Framework\App\RequestInterface $request
+     *
+     * @return \Magento\Framework\Controller\Result\Redirect|mixed
+     * @throws AuthenticationException
+     * @throws UserLockedException
+     * @throws \Exception
+     */
     public function aroundDispatch(
         \Magento\Framework\App\ActionInterface $subject,
         \Closure $proceed,
@@ -95,7 +132,7 @@ class Authentication
 
         $requestedActionName = $request->getActionName();
 
-        if (in_array($requestedActionName, self::CONTROLLER_ACTIONS_OPEN)) {
+        if (in_array($requestedActionName, self::CONTROLLER_ACTIONS_OPEN, true)) {
             return $proceed($request);
         }
 
@@ -109,10 +146,22 @@ class Authentication
             return $proceed($request);
         }
 
-        $this->autoLogin($request, $this->getLoginUsername());
+        $loginUserName = $this->getLoginUsername();
+
+        if (empty($loginUserName)) {
+            $this->messageManager->addErrorMessage("Create an admin user for Vaimo_AdminAutoLogin to work!");
+            return $proceed($request);
+        }
+
+        $this->autoLogin($request, $loginUserName);
 
         if ($request instanceof \Magento\Framework\App\Request\Http) {
-            $routePath = sprintf('%s/%s/%s', $request->getRouteName(), $request->getControllerName(), $request->getActionName());
+            $routePath = sprintf(
+                '%s/%s/%s',
+                $request->getRouteName(),
+                $request->getControllerName(),
+                $request->getActionName()
+            );
         } else {
             $routePath = 'adminhtml/dashboard';
         }
@@ -136,17 +185,12 @@ class Authentication
         $usernameList = array_keys($this->adminUserSource->toArray(false));
 
         foreach (self::DEFAULT_USERNAMES as $username) {
-            if (array_search($username, $usernameList, true) !== false) {
+            if (in_array($username, $usernameList, true)) {
                 return $username;
             }
         }
 
         $username = reset($usernameList);
-
-        if (empty($username)) {
-            throw new \Exception('There are no admin users to attempt login to.');
-        }
-
         return $username;
     }
 
@@ -159,14 +203,12 @@ class Authentication
      */
     private function autoLogin(\Magento\Framework\App\RequestInterface $request, $username)
     {
-        $authStorage = $this->auth->getAuthStorage();
-        $user = $this->modelFactory->create('\Magento\Backend\Model\Auth\Credential\StorageInterface');
+        $user = $this->modelFactory->create(\Magento\Backend\Model\Auth\Credential\StorageInterface::class);
 
         $this->eventManager->dispatch('admin_user_authenticate_before', [
             'username' => $username,
             'user' => $user,
         ]);
-
         $user->loadByUsername($username);
 
         if (empty($user->getId())) {
@@ -175,7 +217,9 @@ class Authentication
 
         // check whether user is disabled
         if (!$user->getIsActive()) {
-            throw new AuthenticationException(__('You did not sign in correctly or your account is temporarily disabled.'));
+            throw new AuthenticationException(
+                __('You did not sign in correctly or your account is temporarily disabled.')
+            );
         }
 
         // check whether user is locked
@@ -184,7 +228,9 @@ class Authentication
         if ($lockExpires) {
             $lockExpires = new \DateTime($lockExpires);
             if ($lockExpires > new \DateTime()) {
-                throw new UserLockedException(__('You did not sign in correctly or your account is temporarily disabled.'));
+                throw new UserLockedException(
+                    __('You did not sign in correctly or your account is temporarily disabled.')
+                );
             }
         }
 
@@ -195,57 +241,30 @@ class Authentication
             'result' => true,
         ]);
 
-        // Handle login
+        $this->handleLogin($user);
+    }
+
+    private function handleLogin($user)
+    {
+        $authStorage = $this->auth->getAuthStorage();
         $user->getResource()->recordLogin($user);
         $authStorage->setUser($user);
         $authStorage->processLogin();
         $this->eventManager->dispatch('backend_auth_user_login_success', ['user' => $user]);
-        $this->populateAdminUserSessionTable($this->auth);
+        $this->populateAdminUserSessionTable();
         $authStorage->refreshAcl();
     }
 
-    /**
-     * Populates admin_user_session table for M2.1+
-     * Intentional usage of Object Manager, since the class is not available on M2.0 and will throw an exception.
-     *
-     * @param \Magento\Backend\Model\Auth $auth
-     */
-    private function populateAdminUserSessionTable(\Magento\Backend\Model\Auth $auth)
+    private function populateAdminUserSessionTable()
     {
-        $plugin = false;
-
-        try {
-            /** @var \Magento\Security\Model\Plugin\Auth $plugin */
-            $plugin = \Magento\Framework\App\ObjectManager::getInstance()->get('\Magento\Security\Model\Plugin\Auth');
-        } catch (\Exception $e) {
-            //ignore exception
-        }
-
-        // This is intentionally outside of the above try-catch because we only want to catch the failure to instantiate the plugin
-        if ($plugin) {
-            $plugin->afterLogin($auth);
+        $this->adminSessionsManager->processLogin();
+        if ($this->adminSessionsManager->getCurrentSession()->isOtherSessionsTerminated()) {
+            $this->messageManager->addWarningMessage(__('All other open sessions for this account were terminated.'));
         }
     }
 
-    /**
-     * Prolong session for M2.1+
-     * Intentional usage of Object Manager, since the class is not available on M2.0 and will throw an exception.
-     */
     private function prolongSession()
     {
-        $model = false;
-
-        try {
-            /** @var \Magento\Security\Model\AdminSessionsManager $model */
-            $model = \Magento\Framework\App\ObjectManager::getInstance()->get('\Magento\Security\Model\AdminSessionsManager');
-        } catch (\Exception $e) {
-            //ignore exception
-        }
-
-        // This is intentionally outside of the above try-catch because we only want to catch the failure to instantiate the plugin
-        if ($model) {
-            $model->processLogin();
-        }
+        $this->adminSessionsManager->processLogin();
     }
-
 }
